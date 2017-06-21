@@ -77,13 +77,14 @@
 #include <google/protobuf/generated_message_util.h>
 #include <google/protobuf/generated_message_reflection.h>
 #include <google/protobuf/arenastring.h>
+#include <google/protobuf/extension_set.h>
+#include <google/protobuf/map_field.h>
 #include <google/protobuf/map_field_inl.h>
+#include <google/protobuf/map_type_handler.h>
 #include <google/protobuf/reflection_ops.h>
 #include <google/protobuf/repeated_field.h>
-#include <google/protobuf/map_type_handler.h>
-#include <google/protobuf/extension_set.h>
 #include <google/protobuf/wire_format.h>
-#include <google/protobuf/map_field.h>
+
 
 namespace google {
 namespace protobuf {
@@ -239,13 +240,12 @@ class DynamicMessage : public Message {
     // looking back at this field. This would assume details about the
     // implementation of scoped_ptr.
     const DynamicMessage* prototype;
-    void* default_oneof_instance;
+    int weak_field_map_offset;  // The offset for the weak_field_map;
 
-    TypeInfo() : prototype(NULL), default_oneof_instance(NULL) {}
+    TypeInfo() : prototype(NULL) {}
 
     ~TypeInfo() {
       delete prototype;
-      operator delete(default_oneof_instance);
     }
   };
 
@@ -325,7 +325,6 @@ void DynamicMessage::SharedCtor() {
   // constructor.)
 
   const Descriptor* descriptor = type_info_->type;
-
   // Initialize oneof cases.
   for (int i = 0 ; i < descriptor->oneof_decl_count(); ++i) {
     new (OffsetToPointer(type_info_->oneof_case_offset + sizeof(uint32) * i))
@@ -338,7 +337,6 @@ void DynamicMessage::SharedCtor() {
   if (type_info_->extensions_offset != -1) {
     new (OffsetToPointer(type_info_->extensions_offset)) ExtensionSet;
   }
-
   for (int i = 0; i < descriptor->field_count(); i++) {
     const FieldDescriptor* field = descriptor->field(i);
     void* field_ptr = OffsetToPointer(type_info_->offsets[i]);
@@ -448,8 +446,8 @@ DynamicMessage::~DynamicMessage() {
             case FieldOptions::STRING: {
               const ::std::string* default_value =
                   &(reinterpret_cast<const ArenaStringPtr*>(
-                        reinterpret_cast<uint8*>(
-                            type_info_->default_oneof_instance) +
+                        reinterpret_cast<const uint8*>(
+                            type_info_->prototype) +
                         type_info_->offsets[i])
                         ->Get());
               reinterpret_cast<ArenaStringPtr*>(field_ptr)->Destroy(
@@ -539,11 +537,6 @@ void DynamicMessage::CrossLinkPrototypes() {
   for (int i = 0; i < descriptor->field_count(); i++) {
     const FieldDescriptor* field = descriptor->field(i);
     void* field_ptr = OffsetToPointer(type_info_->offsets[i]);
-    if (field->containing_oneof()) {
-      field_ptr = reinterpret_cast<uint8*>(
-          type_info_->default_oneof_instance) + type_info_->offsets[i];
-    }
-
     if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE &&
         !field->is_repeated()) {
       // For fields with message types, we need to cross-link with the
@@ -614,7 +607,7 @@ DynamicMessageFactory::~DynamicMessageFactory() {
        iter != prototypes_->map_.end(); ++iter) {
     DeleteDefaultOneofInstance(iter->second->type,
                                iter->second->offsets.get(),
-                               iter->second->default_oneof_instance);
+                               iter->second->prototype);
     delete iter->second;
   }
 }
@@ -700,6 +693,7 @@ const Message* DynamicMessageFactory::GetPrototypeNoLock(
   // All the fields.
   //
   // TODO(b/31226269):  Optimize the order of fields to minimize padding.
+  int num_weak_fields = 0;
   for (int i = 0; i < type->field_count(); i++) {
     // Make sure field is aligned to avoid bus errors.
     // Oneof fields do not use any space.
@@ -723,14 +717,33 @@ const Message* DynamicMessageFactory::GetPrototypeNoLock(
   type_info->internal_metadata_offset = size;
   size += sizeof(InternalMetadataWithArena);
 
+  type_info->weak_field_map_offset = -1;
+
   // Align the final size to make sure no clever allocators think that
   // alignment is not necessary.
-  size = AlignOffset(size);
   type_info->size = size;
 
-  // Allocate the prototype.
+
+  // Construct the reflection object.
+
+  if (type->oneof_decl_count() > 0) {
+    // Compute the size of default oneof instance and offsets of default
+    // oneof fields.
+    for (int i = 0; i < type->oneof_decl_count(); i++) {
+      for (int j = 0; j < type->oneof_decl(i)->field_count(); j++) {
+        const FieldDescriptor* field = type->oneof_decl(i)->field(j);
+        int field_size = OneofFieldSpaceUsed(field);
+        size = AlignTo(size, std::min(kSafeAlignment, field_size));
+        offsets[field->index()] = size;
+        size += field_size;
+      }
+    }
+  }
+  size = AlignOffset(size);
+  // Allocate the prototype + oneof fields.
   void* base = operator new(size);
   memset(base, 0, size);
+
   // The prototype in type_info has to be set before creating the prototype
   // instance on memory. e.g., message Foo { map<int32, Foo> a = 1; }. When
   // creating prototype for Foo, prototype of the map entry will also be
@@ -740,31 +753,11 @@ const Message* DynamicMessageFactory::GetPrototypeNoLock(
   type_info->prototype = static_cast<DynamicMessage*>(base);
   DynamicMessage* prototype = new(base) DynamicMessage(type_info);
 
-  // Construct the reflection object.
-
-  void* default_oneof_instance = NULL;
-  int oneof_case_offset = -1;
-
-  if (type->oneof_decl_count() > 0) {
-    // Compute the size of default oneof instance and offsets of default
-    // oneof fields.
-    int oneof_size = 0;
-    for (int i = 0; i < type->oneof_decl_count(); i++) {
-      for (int j = 0; j < type->oneof_decl(i)->field_count(); j++) {
-        const FieldDescriptor* field = type->oneof_decl(i)->field(j);
-        int field_size = OneofFieldSpaceUsed(field);
-        oneof_size = AlignTo(oneof_size, std::min(kSafeAlignment, field_size));
-        offsets[field->index()] = oneof_size;
-        oneof_size += field_size;
-      }
-    }
+  if (type->oneof_decl_count() > 0 || num_weak_fields > 0) {
     // Construct default oneof instance.
-    type_info->default_oneof_instance = ::operator new(oneof_size);
     ConstructDefaultOneofInstance(type_info->type,
                                   type_info->offsets.get(),
-                                  type_info->default_oneof_instance);
-    default_oneof_instance = type_info->default_oneof_instance;
-    oneof_case_offset = type_info->oneof_case_offset;
+                                  prototype);
   }
 
   internal::ReflectionSchema schema = {
@@ -774,9 +767,9 @@ const Message* DynamicMessageFactory::GetPrototypeNoLock(
       type_info->has_bits_offset,
       type_info->internal_metadata_offset,
       type_info->extensions_offset,
-      default_oneof_instance,
-      oneof_case_offset,
-      type_info->size};
+      type_info->oneof_case_offset,
+      type_info->size,
+      type_info->weak_field_map_offset};
 
   type_info->reflection.reset(new GeneratedMessageReflection(
       type_info->type, schema, type_info->pool, this));
@@ -790,12 +783,12 @@ const Message* DynamicMessageFactory::GetPrototypeNoLock(
 void DynamicMessageFactory::ConstructDefaultOneofInstance(
     const Descriptor* type,
     const uint32 offsets[],
-    void* default_oneof_instance) {
+    void* default_oneof_or_weak_instance) {
   for (int i = 0; i < type->oneof_decl_count(); i++) {
     for (int j = 0; j < type->oneof_decl(i)->field_count(); j++) {
       const FieldDescriptor* field = type->oneof_decl(i)->field(j);
       void* field_ptr = reinterpret_cast<uint8*>(
-          default_oneof_instance) + offsets[field->index()];
+          default_oneof_or_weak_instance) + offsets[field->index()];
       switch (field->cpp_type()) {
 #define HANDLE_TYPE(CPPTYPE, TYPE)                                      \
         case FieldDescriptor::CPPTYPE_##CPPTYPE:                        \
@@ -836,7 +829,7 @@ void DynamicMessageFactory::ConstructDefaultOneofInstance(
 void DynamicMessageFactory::DeleteDefaultOneofInstance(
     const Descriptor* type,
     const uint32 offsets[],
-    void* default_oneof_instance) {
+    const void* default_oneof_instance) {
   for (int i = 0; i < type->oneof_decl_count(); i++) {
     for (int j = 0; j < type->oneof_decl(i)->field_count(); j++) {
       const FieldDescriptor* field = type->oneof_decl(i)->field(j);

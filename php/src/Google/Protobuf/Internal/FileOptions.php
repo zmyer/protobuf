@@ -178,6 +178,27 @@ class FileOptions extends \Google\Protobuf\Internal\Message
     private $has_swift_prefix = false;
     /**
      * <pre>
+     * Sets the php class prefix which is prepended to all php generated classes
+     * from this .proto. Default is empty.
+     * </pre>
+     *
+     * <code>optional string php_class_prefix = 40;</code>
+     */
+    private $php_class_prefix = '';
+    private $has_php_class_prefix = false;
+    /**
+     * <pre>
+     * Use this option to change the namespace of php generated classes. Default
+     * is empty. When this option is empty, the package name will be used for
+     * determining the namespace.
+     * </pre>
+     *
+     * <code>optional string php_namespace = 41;</code>
+     */
+    private $php_namespace = '';
+    private $has_php_namespace = false;
+    /**
+     * <pre>
      * The parser stores options it doesn't recognize here. See above.
      * </pre>
      *
@@ -221,6 +242,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->java_package = $var;
         $this->has_java_package = true;
+
+        return $this;
     }
 
     public function hasJavaPackage()
@@ -260,6 +283,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->java_outer_classname = $var;
         $this->has_java_outer_classname = true;
+
+        return $this;
     }
 
     public function hasJavaOuterClassname()
@@ -301,6 +326,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->java_multiple_files = $var;
         $this->has_java_multiple_files = true;
+
+        return $this;
     }
 
     public function hasJavaMultipleFiles()
@@ -332,6 +359,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->java_generate_equals_and_hash = $var;
         $this->has_java_generate_equals_and_hash = true;
+
+        return $this;
     }
 
     public function hasJavaGenerateEqualsAndHash()
@@ -373,6 +402,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->java_string_check_utf8 = $var;
         $this->has_java_string_check_utf8 = true;
+
+        return $this;
     }
 
     public function hasJavaStringCheckUtf8()
@@ -396,6 +427,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkEnum($var, \Google\Protobuf\Internal\FileOptions_OptimizeMode::class);
         $this->optimize_for = $var;
         $this->has_optimize_for = true;
+
+        return $this;
     }
 
     public function hasOptimizeFor()
@@ -435,6 +468,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->go_package = $var;
         $this->has_go_package = true;
+
+        return $this;
     }
 
     public function hasGoPackage()
@@ -482,6 +517,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->cc_generic_services = $var;
         $this->has_cc_generic_services = true;
+
+        return $this;
     }
 
     public function hasCcGenericServices()
@@ -505,6 +542,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->java_generic_services = $var;
         $this->has_java_generic_services = true;
+
+        return $this;
     }
 
     public function hasJavaGenericServices()
@@ -528,6 +567,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->py_generic_services = $var;
         $this->has_py_generic_services = true;
+
+        return $this;
     }
 
     public function hasPyGenericServices()
@@ -565,6 +606,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->deprecated = $var;
         $this->has_deprecated = true;
+
+        return $this;
     }
 
     public function hasDeprecated()
@@ -598,6 +641,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkBool($var);
         $this->cc_enable_arenas = $var;
         $this->has_cc_enable_arenas = true;
+
+        return $this;
     }
 
     public function hasCcEnableArenas()
@@ -631,6 +676,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->objc_class_prefix = $var;
         $this->has_objc_class_prefix = true;
+
+        return $this;
     }
 
     public function hasObjcClassPrefix()
@@ -662,6 +709,8 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->csharp_namespace = $var;
         $this->has_csharp_namespace = true;
+
+        return $this;
     }
 
     public function hasCsharpNamespace()
@@ -699,11 +748,85 @@ class FileOptions extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->swift_prefix = $var;
         $this->has_swift_prefix = true;
+
+        return $this;
     }
 
     public function hasSwiftPrefix()
     {
         return $this->has_swift_prefix;
+    }
+
+    /**
+     * <pre>
+     * Sets the php class prefix which is prepended to all php generated classes
+     * from this .proto. Default is empty.
+     * </pre>
+     *
+     * <code>optional string php_class_prefix = 40;</code>
+     */
+    public function getPhpClassPrefix()
+    {
+        return $this->php_class_prefix;
+    }
+
+    /**
+     * <pre>
+     * Sets the php class prefix which is prepended to all php generated classes
+     * from this .proto. Default is empty.
+     * </pre>
+     *
+     * <code>optional string php_class_prefix = 40;</code>
+     */
+    public function setPhpClassPrefix($var)
+    {
+        GPBUtil::checkString($var, True);
+        $this->php_class_prefix = $var;
+        $this->has_php_class_prefix = true;
+
+        return $this;
+    }
+
+    public function hasPhpClassPrefix()
+    {
+        return $this->has_php_class_prefix;
+    }
+
+    /**
+     * <pre>
+     * Use this option to change the namespace of php generated classes. Default
+     * is empty. When this option is empty, the package name will be used for
+     * determining the namespace.
+     * </pre>
+     *
+     * <code>optional string php_namespace = 41;</code>
+     */
+    public function getPhpNamespace()
+    {
+        return $this->php_namespace;
+    }
+
+    /**
+     * <pre>
+     * Use this option to change the namespace of php generated classes. Default
+     * is empty. When this option is empty, the package name will be used for
+     * determining the namespace.
+     * </pre>
+     *
+     * <code>optional string php_namespace = 41;</code>
+     */
+    public function setPhpNamespace($var)
+    {
+        GPBUtil::checkString($var, True);
+        $this->php_namespace = $var;
+        $this->has_php_namespace = true;
+
+        return $this;
+    }
+
+    public function hasPhpNamespace()
+    {
+        return $this->has_php_namespace;
     }
 
     /**
@@ -727,9 +850,11 @@ class FileOptions extends \Google\Protobuf\Internal\Message
      */
     public function setUninterpretedOption(&$var)
     {
-        GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::MESSAGE, \Google\Protobuf\Internal\UninterpretedOption::class);
-        $this->uninterpreted_option = $var;
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::MESSAGE, \Google\Protobuf\Internal\UninterpretedOption::class);
+        $this->uninterpreted_option = $arr;
         $this->has_uninterpreted_option = true;
+
+        return $this;
     }
 
     public function hasUninterpretedOption()

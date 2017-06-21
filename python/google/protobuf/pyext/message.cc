@@ -779,7 +779,7 @@ PyObject* CheckString(PyObject* arg, const FieldDescriptor* descriptor) {
       encoded_string = arg;  // Already encoded.
       Py_INCREF(encoded_string);
     } else {
-      encoded_string = PyUnicode_AsEncodedObject(arg, "utf-8", NULL);
+      encoded_string = PyUnicode_AsEncodedString(arg, "utf-8", NULL);
     }
   } else {
     // In this case field type is "bytes".
@@ -2342,8 +2342,10 @@ PyObject* InternalGetSubMessage(
   const Message& sub_message = reflection->GetMessage(
       *self->message, field_descriptor, factory->message_factory);
 
-  CMessageClass* message_class = message_factory::GetMessageClass(
+  CMessageClass* message_class = message_factory::GetOrCreateMessageClass(
       factory, field_descriptor->message_type());
+  ScopedPyObjectPtr message_class_handler(
+      reinterpret_cast<PyObject*>(message_class));
   if (message_class == NULL) {
     return NULL;
   }

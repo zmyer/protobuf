@@ -77,7 +77,7 @@ TEST(MessageTest, SerializeHelpers) {
 
   protobuf_unittest::TestAllTypes message;
   TestUtil::SetAllFields(&message);
-  stringstream stream;
+  std::stringstream stream;
 
   string str1("foo");
   string str2("bar");
@@ -101,7 +101,7 @@ TEST(MessageTest, SerializeHelpers) {
 }
 
 TEST(MessageTest, SerializeToBrokenOstream) {
-  ofstream out;
+  std::ofstream out;
   protobuf_unittest::TestAllTypes message;
   message.set_optional_int32(123);
 
@@ -155,7 +155,7 @@ TEST(MessageTest, ParseHelpers) {
   {
     // Test ParseFromIstream.
     protobuf_unittest::TestAllTypes message;
-    stringstream stream(data);
+    std::stringstream stream(data);
     EXPECT_TRUE(message.ParseFromIstream(&stream));
     EXPECT_TRUE(stream.eof());
     TestUtil::ExpectAllFieldsSet(message);
@@ -549,6 +549,17 @@ TEST(MessageTest, MergeFrom) {
   EXPECT_EQ(11, dest.repeated_uint32(0));
   EXPECT_EQ(12, dest.repeated_uint32(1));
   ASSERT_EQ(0, dest.repeated_uint64_size());
+}
+
+TEST(MessageTest, IsInitialized) {
+  protobuf_unittest::TestIsInitialized msg;
+  EXPECT_TRUE(msg.IsInitialized());
+  protobuf_unittest::TestIsInitialized::SubMessage* sub_message = msg.mutable_sub_message();
+  EXPECT_TRUE(msg.IsInitialized());
+  protobuf_unittest::TestIsInitialized::SubMessage::SubGroup* sub_group = sub_message->mutable_subgroup();
+  EXPECT_FALSE(msg.IsInitialized());
+  sub_group->set_i(1);
+  EXPECT_TRUE(msg.IsInitialized());
 }
 
 TEST(MessageFactoryTest, GeneratedFactoryLookup) {

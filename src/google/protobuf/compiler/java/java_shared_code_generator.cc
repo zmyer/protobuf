@@ -181,13 +181,17 @@ void SharedCodeGenerator::GenerateDescriptors(io::Printer* printer) {
   // Find out all dependencies.
   std::vector<std::pair<string, string> > dependencies;
   for (int i = 0; i < file_->dependency_count(); i++) {
-    if (ShouldIncludeDependency(file_->dependency(i))) {
-      string filename = file_->dependency(i)->name();
-      string classname = FileJavaPackage(file_->dependency(i)) + "." +
-                         name_resolver_->GetDescriptorClassName(
-                             file_->dependency(i));
-      dependencies.push_back(std::make_pair(filename, classname));
+    string filename = file_->dependency(i)->name();
+    string package = FileJavaPackage(file_->dependency(i));
+    string classname = name_resolver_->GetDescriptorClassName(
+        file_->dependency(i));
+    string full_name;
+    if (package.empty()) {
+      full_name = classname;
+    } else {
+      full_name = package + "." + classname;
     }
+    dependencies.push_back(std::make_pair(filename, full_name));
   }
 
   // -----------------------------------------------------------------
@@ -207,11 +211,6 @@ void SharedCodeGenerator::GenerateDescriptors(io::Printer* printer) {
 
   printer->Print(
     "    }, assigner);\n");
-}
-
-bool SharedCodeGenerator::ShouldIncludeDependency(
-    const FileDescriptor* descriptor) {
-  return true;
 }
 
 }  // namespace java

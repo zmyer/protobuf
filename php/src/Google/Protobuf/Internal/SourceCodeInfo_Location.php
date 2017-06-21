@@ -179,9 +179,11 @@ class SourceCodeInfo_Location extends \Google\Protobuf\Internal\Message
      */
     public function setPath(&$var)
     {
-        GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
-        $this->path = $var;
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
+        $this->path = $arr;
         $this->has_path = true;
+
+        return $this;
     }
 
     public function hasPath()
@@ -218,9 +220,11 @@ class SourceCodeInfo_Location extends \Google\Protobuf\Internal\Message
      */
     public function setSpan(&$var)
     {
-        GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
-        $this->span = $var;
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
+        $this->span = $arr;
         $this->has_span = true;
+
+        return $this;
     }
 
     public function hasSpan()
@@ -322,6 +326,8 @@ class SourceCodeInfo_Location extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->leading_comments = $var;
         $this->has_leading_comments = true;
+
+        return $this;
     }
 
     public function hasLeadingComments()
@@ -345,6 +351,8 @@ class SourceCodeInfo_Location extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->trailing_comments = $var;
         $this->has_trailing_comments = true;
+
+        return $this;
     }
 
     public function hasTrailingComments()
@@ -365,9 +373,11 @@ class SourceCodeInfo_Location extends \Google\Protobuf\Internal\Message
      */
     public function setLeadingDetachedComments(&$var)
     {
-        GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::STRING);
-        $this->leading_detached_comments = $var;
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::STRING);
+        $this->leading_detached_comments = $arr;
         $this->has_leading_detached_comments = true;
+
+        return $this;
     }
 
     public function hasLeadingDetachedComments()

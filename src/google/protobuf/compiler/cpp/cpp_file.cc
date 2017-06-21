@@ -39,6 +39,7 @@
 #include <google/protobuf/stubs/shared_ptr.h>
 #endif
 #include <set>
+#include <vector>
 
 #include <google/protobuf/compiler/cpp/cpp_enum.h>
 #include <google/protobuf/compiler/cpp/cpp_service.h>
@@ -54,24 +55,64 @@ namespace google {
 namespace protobuf {
 namespace compiler {
 namespace cpp {
+namespace {
+// The list of names that are defined as macros on some platforms. We need to
+// #undef them for the generated code to compile.
+const char* kMacroNames[] = {"major", "minor"};
+
+bool IsMacroName(const string& name) {
+  // Just do a linear search as the number of elements is very small.
+  for (int i = 0; i < GOOGLE_ARRAYSIZE(kMacroNames); ++i) {
+    if (name == kMacroNames[i]) return true;
+  }
+  return false;
+}
+
+void CollectMacroNames(const Descriptor* message, std::vector<string>* names) {
+  for (int i = 0; i < message->field_count(); ++i) {
+    const FieldDescriptor* field = message->field(i);
+    if (IsMacroName(field->name())) {
+      names->push_back(field->name());
+    }
+  }
+  for (int i = 0; i < message->nested_type_count(); ++i) {
+    CollectMacroNames(message->nested_type(i), names);
+  }
+}
+
+void CollectMacroNames(const FileDescriptor* file, std::vector<string>* names) {
+  // Only do this for protobuf's own types. There are some google3 protos using
+  // macros as field names and the generated code compiles after the macro
+  // expansion. Undefing these macros actually breaks such code.
+  if (file->name() != "google/protobuf/compiler/plugin.proto") {
+    return;
+  }
+  for (int i = 0; i < file->message_type_count(); ++i) {
+    CollectMacroNames(file->message_type(i), names);
+  }
+}
+
+
+}  // namespace
 
 // ===================================================================
 
 FileGenerator::FileGenerator(const FileDescriptor* file, const Options& options)
     : file_(file),
       options_(options),
+      scc_analyzer_(options),
       message_generators_owner_(
-          new google::protobuf::scoped_ptr<MessageGenerator>[ file->message_type_count() ]),
+          new google::protobuf::scoped_ptr<MessageGenerator>[file->message_type_count()]),
       enum_generators_owner_(
-          new google::protobuf::scoped_ptr<EnumGenerator>[ file->enum_type_count() ]),
+          new google::protobuf::scoped_ptr<EnumGenerator>[file->enum_type_count()]),
       service_generators_owner_(
-          new google::protobuf::scoped_ptr<ServiceGenerator>[ file->service_count() ]),
+          new google::protobuf::scoped_ptr<ServiceGenerator>[file->service_count()]),
       extension_generators_owner_(
-          new google::protobuf::scoped_ptr<ExtensionGenerator>[ file->extension_count() ]) {
+          new google::protobuf::scoped_ptr<ExtensionGenerator>[file->extension_count()]) {
 
   for (int i = 0; i < file->message_type_count(); i++) {
     message_generators_owner_[i].reset(
-        new MessageGenerator(file->message_type(i), options));
+        new MessageGenerator(file->message_type(i), options, &scc_analyzer_));
     message_generators_owner_[i]->Flatten(&message_generators_);
   }
 
@@ -103,10 +144,23 @@ FileGenerator::FileGenerator(const FileDescriptor* file, const Options& options)
 
 FileGenerator::~FileGenerator() {}
 
+void FileGenerator::GenerateMacroUndefs(io::Printer* printer) {
+  std::vector<string> names_to_undef;
+  CollectMacroNames(file_, &names_to_undef);
+  for (int i = 0; i < names_to_undef.size(); ++i) {
+    printer->Print(
+        "#ifdef $name$\n"
+        "#undef $name$\n"
+        "#endif\n",
+        "name", names_to_undef[i]);
+  }
+}
+
 void FileGenerator::GenerateHeader(io::Printer* printer) {
   printer->Print(
     "// @@protoc_insertion_point(includes)\n");
 
+  GenerateMacroUndefs(printer);
 
   GenerateForwardDeclarations(printer);
 
@@ -195,6 +249,7 @@ void FileGenerator::GeneratePBHeader(io::Printer* printer,
   } else {
     GenerateLibraryIncludes(printer);
   }
+
   GenerateDependencyIncludes(printer);
   GenerateMetadataPragma(printer, info_path);
 
@@ -281,17 +336,25 @@ void FileGenerator::GenerateSource(io::Printer* printer) {
   GenerateNamespaceOpeners(printer);
 
   for (int i = 0; i < message_generators_.size(); i++) {
-    if (IsMapEntryMessage(message_generators_[i]->descriptor_)) continue;
+    string parent;
+    if (IsMapEntryMessage(message_generators_[i]->descriptor_)) {
+      parent = ClassName(message_generators_[i]->descriptor_->containing_type(),
+                         false) +
+               "::";
+    }
     printer->Print(
         "class $classname$DefaultTypeInternal : "
-        "public ::google::protobuf::internal::ExplicitlyConstructed<$classname$> {};\n"
-        "$classname$DefaultTypeInternal _$classname$_default_instance_;\n",
+        "public ::google::protobuf::internal::ExplicitlyConstructed<$parent$$classname$> "
+        "{\n",
+        "parent", parent, "classname", message_generators_[i]->classname_);
+    printer->Indent();
+    message_generators_[i]->GenerateExtraDefaultFields(printer);
+    printer->Outdent();
+    printer->Print(
+        "} _$classname$_default_instance_;\n",
         "classname", message_generators_[i]->classname_);
   }
 
-  for (int i = 0; i < message_generators_.size(); i++) {
-    message_generators_[i]->index_in_metadata_ = i;
-  }
   for (int i = 0; i < enum_generators_.size(); i++) {
     enum_generators_[i]->index_in_metadata_ = i;
   }
@@ -300,6 +363,12 @@ void FileGenerator::GenerateSource(io::Printer* printer) {
       service_generators_[i]->index_in_metadata_ = i;
     }
   }
+
+  printer->Print(
+      "\n"
+      "namespace $file_namespace$ {\n"
+      "\n",
+      "file_namespace", FileLevelNamespace(file_->name()));
 
   if (HasDescriptorMethods(file_, options_)) {
     printer->Print(
@@ -324,10 +393,6 @@ void FileGenerator::GenerateSource(io::Printer* printer) {
           "size", SimpleItoa(file_->service_count()));
     }
 
-    for (int i = 0; i < message_generators_.size(); i++) {
-      message_generators_[i]->GenerateDescriptorDeclarations(printer);
-    }
-
     printer->Print(
       "\n"
       "}  // namespace\n"
@@ -337,6 +402,12 @@ void FileGenerator::GenerateSource(io::Printer* printer) {
   // Define our externally-visible BuildDescriptors() function.  (For the lite
   // library, all this does is initialize default instances.)
   GenerateBuildDescriptors(printer);
+
+  printer->Print(
+      "\n"
+      "}  // namespace $file_namespace$\n"
+      "\n",
+      "file_namespace", FileLevelNamespace(file_->name()));
 
   // Generate enums.
   for (int i = 0; i < enum_generators_.size(); i++) {
@@ -471,30 +542,82 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
   // In optimize_for = LITE_RUNTIME mode, we don't generate AssignDescriptors()
   // and we only use AddDescriptors() to allocate default instances.
 
+  // TODO(ckennelly): Gate this with the same options flag to enable
+  // table-driven parsing.
+
+  printer->Print("PROTOBUF_CONSTEXPR_VAR ::google::protobuf::internal::ParseTableField\n"
+                 "    const TableStruct::entries[] = {\n");
+  printer->Indent();
+
+  std::vector<size_t> entries;
+  size_t count = 0;
+  for (int i = 0; i < message_generators_.size(); i++) {
+    size_t value = message_generators_[i]->GenerateParseOffsets(printer);
+    entries.push_back(value);
+    count += value;
+  }
+
+  // We need these arrays to exist, and MSVC does not like empty arrays.
+  if (count == 0) {
+    printer->Print("{0, 0, 0, ::google::protobuf::internal::kInvalidMask, 0, 0},\n");
+  }
+
+  printer->Outdent();
+  printer->Print(
+      "};\n"
+      "\n"
+      "PROTOBUF_CONSTEXPR_VAR ::google::protobuf::internal::AuxillaryParseTableField\n"
+      "    const TableStruct::aux[] = {\n");
+  printer->Indent();
+
+  std::vector<size_t> aux_entries;
+  count = 0;
+  for (int i = 0; i < message_generators_.size(); i++) {
+    size_t value = message_generators_[i]->GenerateParseAuxTable(printer);
+    aux_entries.push_back(value);
+    count += value;
+  }
+
+  if (count == 0) {
+    printer->Print("::google::protobuf::internal::AuxillaryParseTableField(),\n");
+  }
+
+  printer->Outdent();
+  printer->Print(
+      "};\n"
+      "PROTOBUF_CONSTEXPR_VAR ::google::protobuf::internal::ParseTable const\n"
+      "    TableStruct::schema[] = {\n");
+  printer->Indent();
+
+  size_t offset = 0;
+  size_t aux_offset = 0;
+  for (int i = 0; i < message_generators_.size(); i++) {
+    message_generators_[i]->GenerateParseTable(printer, offset, aux_offset);
+    offset += entries[i];
+    aux_offset += aux_entries[i];
+  }
+
+  if (message_generators_.empty()) {
+    printer->Print("{ NULL, NULL, 0, -1, -1, false },\n");
+  }
+
+  printer->Outdent();
+  printer->Print(
+      "};\n"
+      "\n");
+
   if (HasDescriptorMethods(file_, options_)) {
     if (!message_generators_.empty()) {
-      printer->Print(
-          "\n"
-          "const ::google::protobuf::uint32* $offsetfunname$() GOOGLE_ATTRIBUTE_COLD;\n"
-          "const ::google::protobuf::uint32* $offsetfunname$() {\n",
-          "offsetfunname", GlobalOffsetTableName(file_->name()));
-      printer->Indent();
-
-      printer->Print("static const ::google::protobuf::uint32 offsets[] = {\n");
+      printer->Print("const ::google::protobuf::uint32 TableStruct::offsets[] = {\n");
       printer->Indent();
       std::vector<std::pair<size_t, size_t> > pairs;
       for (int i = 0; i < message_generators_.size(); i++) {
         pairs.push_back(message_generators_[i]->GenerateOffsets(printer));
       }
       printer->Outdent();
-      printer->Outdent();
       printer->Print(
-          "  };\n"
-          "  return offsets;\n"
-          "}\n"
-          "\n");
-
-      printer->Print(
+          "};\n"
+          "\n"
           "static const ::google::protobuf::internal::MigrationSchema schemas[] = {\n");
       printer->Indent();
       {
@@ -508,25 +631,15 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
       printer->Outdent();
       printer->Print(
           "};\n"
-          "\n"
-          "static const ::google::protobuf::internal::DefaultInstanceData "
-          "file_default_instances[] = {\n");
+          "\nstatic "
+          "::google::protobuf::Message const * const file_default_instances[] = {\n");
       printer->Indent();
       for (int i = 0; i < message_generators_.size(); i++) {
         const Descriptor* descriptor = message_generators_[i]->descriptor_;
-        if (IsMapEntryMessage(descriptor)) continue;
-
-        string oneof_default = "NULL";
-        if (message_generators_[i]->descriptor_->oneof_decl_count()) {
-          oneof_default =
-              "&" + ClassName(descriptor, false) + "_default_oneof_instance_";
-        }
         printer->Print(
-            "{reinterpret_cast<const "
-            "::google::protobuf::Message*>(&_$classname$_default_instance_), "
-            "$oneof_default$},\n",
-            "classname", ClassName(descriptor, false), "oneof_default",
-            oneof_default);
+            "reinterpret_cast<const "
+            "::google::protobuf::Message*>(&_$classname$_default_instance_),\n",
+            "classname", ClassName(descriptor, false));
       }
       printer->Outdent();
       printer->Print(
@@ -535,12 +648,11 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
     } else {
       // we still need these symbols to exist
       printer->Print(
-          "inline ::google::protobuf::uint32* $offsetfunname$() { return NULL; }\n"
+          // MSVC doesn't like empty arrays, so we add a dummy.
+          "const ::google::protobuf::uint32 TableStruct::offsets[] = { ~0u };\n"
           "static const ::google::protobuf::internal::MigrationSchema* schemas = NULL;\n"
-          "static const ::google::protobuf::internal::DefaultInstanceData* "
-          "file_default_instances = NULL;\n",
-          "offsetfunname",
-          GlobalOffsetTableName(file_->name()));
+          "static const ::google::protobuf::Message* const* "
+          "file_default_instances = NULL;\n");
     }
 
     // ---------------------------------------------------------------
@@ -557,12 +669,36 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
         // is requested *during* static init then AddDescriptors() may not have
         // been called yet, so we call it manually.  Note that it's fine if
         // AddDescriptors() is called multiple times.
-        "  $adddescriptorsname$();\n"
+        "  AddDescriptors();\n"
         "  ::google::protobuf::MessageFactory* factory = $factory$;\n"
         "  AssignDescriptors(\n"
         "      \"$filename$\", schemas, file_default_instances, "
-        "$offsetfunname$(), factory,\n"
-        "      $metadata$, $enum_descriptors$, $service_descriptors$);\n"
+        "TableStruct::offsets, factory,\n"
+        "      $metadata$, $enum_descriptors$, $service_descriptors$);\n",
+        "filename", file_->name(), "metadata",
+        !message_generators_.empty() ? "file_level_metadata" : "NULL",
+        "enum_descriptors",
+        !enum_generators_.empty() ? "file_level_enum_descriptors" : "NULL",
+        "service_descriptors",
+        HasGenericServices(file_, options_) && file_->service_count() > 0
+            ? "file_level_service_descriptors"
+            : "NULL",
+        "factory", message_factory);
+    // TODO(gerbens) have the compiler include the schemas for map types
+    // so that this can go away, and we can potentially use table driven
+    // serialization for map types as well.
+    for (int i = 0; i < message_generators_.size(); i++) {
+      if (!IsMapEntryMessage(message_generators_[i]->descriptor_)) continue;
+      printer->Print(
+          "file_level_metadata[$index$].reflection = "
+          "$parent$::$classname$::CreateReflection(file_level_metadata[$index$]"
+          ".descriptor, _$classname$_default_instance_.get_mutable());\n",
+          "index", SimpleItoa(i), "parent",
+          ClassName(message_generators_[i]->descriptor_->containing_type(),
+                    false),
+          "classname", ClassName(message_generators_[i]->descriptor_, false));
+    }
+    printer->Print(
         "}\n"
         "\n"
         "void protobuf_AssignDescriptorsOnce() {\n"
@@ -570,9 +706,7 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
         "  ::google::protobuf::GoogleOnceInit(&once, &protobuf_AssignDescriptors);\n"
         "}\n"
         "\n",
-        "adddescriptorsname", GlobalAddDescriptorsName(file_->name()),
-        "offsetfunname", GlobalOffsetTableName(file_->name()), "filename",
-        file_->name(), "metadata",
+        "filename", file_->name(), "metadata",
         !message_generators_.empty() ? "file_level_metadata" : "NULL",
         "enum_descriptors",
         !enum_generators_.empty() ? "file_level_enum_descriptors" : "NULL",
@@ -598,12 +732,6 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
         "size", SimpleItoa(message_generators_.size()));
     }
 
-    // Map types are treated special
-    // TODO(gerbens) find a way to treat maps more like normal messages.
-    for (int i = 0; i < message_generators_.size(); i++) {
-      message_generators_[i]->GenerateTypeRegistrations(printer);
-    }
-
     printer->Outdent();
     printer->Print(
       "}\n"
@@ -616,12 +744,20 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
   // ShutdownFile():  Deletes descriptors, default instances, etc. on shutdown.
   printer->Print(
     "\n"
-    "void $shutdownfilename$() {\n",
-    "shutdownfilename", GlobalShutdownFileName(file_->name()));
+    "void TableStruct::Shutdown() {\n");
   printer->Indent();
 
   for (int i = 0; i < message_generators_.size(); i++) {
     message_generators_[i]->GenerateShutdownCode(printer);
+  }
+
+  if (HasDescriptorMethods(file_, options_)) {
+    for (int i = 0; i < message_generators_.size(); i++) {
+      if (!IsMapEntryMessage(message_generators_[i]->descriptor_)) continue;
+      printer->Print(
+          "delete file_level_metadata[$index$].reflection;\n",
+          "index", SimpleItoa(i));
+    }
   }
 
   printer->Outdent();
@@ -630,13 +766,12 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
 
   // -----------------------------------------------------------------
 
-  // Now generate the InitDefaults() function.
+  // Now generate the InitDefaultsImpl() function.
   printer->Print(
-      "void $initdefaultsname$_impl() {\n"
+      "void TableStruct::InitDefaultsImpl() {\n"
       "  GOOGLE_PROTOBUF_VERIFY_VERSION;\n\n"
-      "",
-      // Vars.
-      "initdefaultsname", GlobalInitDefaultsName(file_->name()));
+      // Force initialization of primitive values we depend on.
+      "  ::google::protobuf::internal::InitProtobufDefaults();\n");
 
   printer->Indent();
 
@@ -645,16 +780,12 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
   for (int i = 0; i < file_->dependency_count(); i++) {
     const FileDescriptor* dependency = file_->dependency(i);
     // Print the namespace prefix for the dependency.
-    string add_desc_name = QualifiedFileLevelSymbol(
-        dependency->package(), GlobalInitDefaultsName(dependency->name()));
+    string file_namespace = QualifiedFileLevelSymbol(
+        dependency->package(), FileLevelNamespace(dependency->name()));
     // Call its AddDescriptors function.
-    printer->Print(
-      "$name$();\n",
-      "name", add_desc_name);
+    printer->Print("$file_namespace$::InitDefaults();\n", "file_namespace",
+                   file_namespace);
   }
-
-  // Force initialization of primitive values we depend on.
-  printer->Print("::google::protobuf::internal::InitProtobufDefaults();\n");
 
   // Allocate and initialize default instances.  This can't be done lazily
   // since default instances are returned by simple accessors and are used with
@@ -672,21 +803,17 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
   printer->Print(
       "}\n"
       "\n"
-      "void $initdefaultsname$() {\n"
+      "void InitDefaults() {\n"
       "  static GOOGLE_PROTOBUF_DECLARE_ONCE(once);\n"
-      "  ::google::protobuf::GoogleOnceInit(&once, &$initdefaultsname$_impl);\n"
-      "}\n",
-      "initdefaultsname", GlobalInitDefaultsName(file_->name()));
+      "  ::google::protobuf::GoogleOnceInit(&once, &TableStruct::InitDefaultsImpl);\n"
+      "}\n");
 
   // -----------------------------------------------------------------
 
   // Now generate the AddDescriptors() function.
   printer->Print(
-      "void $adddescriptorsname$_impl() {\n"
-      "  $initdefaultsname$();\n",
-      // Vars.
-      "adddescriptorsname", GlobalAddDescriptorsName(file_->name()),
-      "initdefaultsname", GlobalInitDefaultsName(file_->name()));
+      "void AddDescriptorsImpl() {\n"
+      "  InitDefaults();\n");
 
   printer->Indent();
   if (HasDescriptorMethods(file_, options_)) {
@@ -702,12 +829,7 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
     printer->Print("static const char descriptor[] = {\n");
     printer->Indent();
 
-#ifdef _MSC_VER
-    bool breakdown_large_file = true;
-#else
-    bool breakdown_large_file = false;
-#endif
-    if (breakdown_large_file && file_data.size() > 66538) {
+    if (file_data.size() > 66535) {
       // Workaround for MSVC: "Error C1091: compiler limit: string exceeds 65535
       // bytes in length". Declare a static array of characters rather than use
       // a string literal. Only write 25 bytes per line.
@@ -748,42 +870,36 @@ void FileGenerator::GenerateBuildDescriptors(io::Printer* printer) {
   for (int i = 0; i < file_->dependency_count(); i++) {
     const FileDescriptor* dependency = file_->dependency(i);
     // Print the namespace prefix for the dependency.
-    string add_desc_name = QualifiedFileLevelSymbol(
-        dependency->package(), GlobalAddDescriptorsName(dependency->name()));
+    string file_namespace = QualifiedFileLevelSymbol(
+        dependency->package(), FileLevelNamespace(dependency->name()));
     // Call its AddDescriptors function.
-    printer->Print("$adddescriptorsname$();\n", "adddescriptorsname",
-                   add_desc_name);
+    printer->Print("$file_namespace$::AddDescriptors();\n", "file_namespace",
+                   file_namespace);
   }
 
   printer->Print(
-      "::google::protobuf::internal::OnShutdown(&$shutdownfilename$);\n",
-      "shutdownfilename", GlobalShutdownFileName(file_->name()));
+      "::google::protobuf::internal::OnShutdown(&TableStruct::Shutdown);\n");
 
   printer->Outdent();
   printer->Print(
       "}\n"
       "\n"
-      "GOOGLE_PROTOBUF_DECLARE_ONCE($adddescriptorsname$_once_);\n"
-      "void $adddescriptorsname$() {\n"
-      "  ::google::protobuf::GoogleOnceInit(&$adddescriptorsname$_once_,\n"
-      "                 &$adddescriptorsname$_impl);\n"
-      "}\n",
-      "adddescriptorsname", GlobalAddDescriptorsName(file_->name()));
+      "void AddDescriptors() {\n"
+      "  static GOOGLE_PROTOBUF_DECLARE_ONCE(once);\n"
+      "  ::google::protobuf::GoogleOnceInit(&once, &AddDescriptorsImpl);\n"
+      "}\n");
 
   if (!StaticInitializersForced(file_, options_)) {
-    printer->Print("#ifndef GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER\n");
+    printer->Print("#ifdef GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER\n");
   }
   printer->Print(
       // With static initializers.
       "// Force AddDescriptors() to be called at static initialization time.\n"
-      "struct StaticDescriptorInitializer_$filename$ {\n"
-      "  StaticDescriptorInitializer_$filename$() {\n"
-      "    $adddescriptorsname$();\n"
+      "struct StaticDescriptorInitializer {\n"
+      "  StaticDescriptorInitializer() {\n"
+      "    AddDescriptors();\n"
       "  }\n"
-      "} static_descriptor_initializer_$filename$_;\n",
-      // Vars.
-      "adddescriptorsname", GlobalAddDescriptorsName(file_->name()), "filename",
-      FilenameIdentifier(file_->name()));
+      "} static_descriptor_initializer;\n");
   if (!StaticInitializersForced(file_, options_)) {
     printer->Print("#endif  // GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER\n");
   }
@@ -884,10 +1000,19 @@ void FileGenerator::GenerateLibraryIncludes(io::Printer* printer) {
 
   // OK, it's now safe to #include other files.
   printer->Print(
-    "#include <google/protobuf/arena.h>\n"
-    "#include <google/protobuf/arenastring.h>\n"
-    "#include <google/protobuf/generated_message_util.h>\n"
-    "#include <google/protobuf/metadata.h>\n");
+      "#include <google/protobuf/io/coded_stream.h>\n"
+      "#include <google/protobuf/arena.h>\n"
+      "#include <google/protobuf/arenastring.h>\n"
+      "#include <google/protobuf/generated_message_table_driven.h>\n"
+      "#include <google/protobuf/generated_message_util.h>\n");
+
+  if (HasDescriptorMethods(file_, options_)) {
+    printer->Print(
+      "#include <google/protobuf/metadata.h>\n");
+  } else {
+    printer->Print(
+      "#include <google/protobuf/metadata_lite.h>\n");
+  }
 
   if (!message_generators_.empty()) {
     if (HasDescriptorMethods(file_, options_)) {
@@ -905,7 +1030,8 @@ void FileGenerator::GenerateLibraryIncludes(io::Printer* printer) {
     "  // IWYU pragma: export\n");
   if (HasMapFields(file_)) {
     printer->Print(
-        "#include <google/protobuf/map.h>\n");
+        "#include <google/protobuf/map.h>"
+        "  // IWYU pragma: export\n");
     if (HasDescriptorMethods(file_, options_)) {
       printer->Print(
           "#include <google/protobuf/map_field_inl.h>\n");
@@ -982,12 +1108,24 @@ void FileGenerator::GenerateGlobalStateFunctionDeclarations(
   // functions, so that we can declare them to be friends of each class.
   printer->Print(
       "\n"
+      "namespace $file_namespace$ {\n"
       "// Internal implementation detail -- do not call these.\n"
-      "void $dllexport_decl$$adddescriptorsname$();\n"
-      "void $dllexport_decl$$initdefaultsname$();\n",
-      "initdefaultsname", GlobalInitDefaultsName(file_->name()),
-      "adddescriptorsname", GlobalAddDescriptorsName(file_->name()),
-      "dllexport_decl",
+      "struct $dllexport_decl$TableStruct {\n"
+      "  static const ::google::protobuf::internal::ParseTableField entries[];\n"
+      "  static const ::google::protobuf::internal::AuxillaryParseTableField aux[];\n"
+      "  static const ::google::protobuf::internal::ParseTable schema[];\n"
+      "  static const ::google::protobuf::uint32 offsets[];\n"
+      // The following function(s) need to be able to access private members of
+      // the messages defined in the file. So we make them static members.
+      // This is the internal implementation of InitDefaults. It should only
+      // be called by InitDefaults which makes sure it will be called only once.
+      "  static void InitDefaultsImpl();\n"
+      "  static void Shutdown();\n"
+      "};\n"
+      "void $dllexport_decl$AddDescriptors();\n"
+      "void $dllexport_decl$InitDefaults();\n"
+      "}  // namespace $file_namespace$\n",
+      "file_namespace", FileLevelNamespace(file_->name()), "dllexport_decl",
       options_.dllexport_decl.empty() ? "" : options_.dllexport_decl + " ");
 }
 

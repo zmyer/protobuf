@@ -222,6 +222,11 @@ bool MessageLite::ParsePartialFromArray(const void* data, int size) {
 
 // ===================================================================
 
+uint8* MessageLite::SerializeWithCachedSizesToArray(uint8* target) const {
+  return InternalSerializeWithCachedSizesToArray(
+      io::CodedOutputStream::IsDefaultSerializationDeterministic(), target);
+}
+
 uint8* MessageLite::InternalSerializeWithCachedSizesToArray(
     bool deterministic, uint8* target) const {
   // We only optimize this when using optimize_for = SPEED.  In other cases
@@ -229,6 +234,7 @@ uint8* MessageLite::InternalSerializeWithCachedSizesToArray(
   int size = GetCachedSize();
   io::ArrayOutputStream out(target, size);
   io::CodedOutputStream coded_out(&out);
+  coded_out.SetSerializationDeterministic(deterministic);
   SerializeWithCachedSizes(&coded_out);
   GOOGLE_CHECK(!coded_out.HadError());
   return target + size;

@@ -36,6 +36,7 @@
 #include <google/protobuf/compiler/cpp/cpp_helpers.h>
 #include <google/protobuf/io/printer.h>
 #include <google/protobuf/descriptor.pb.h>
+
 #include <google/protobuf/stubs/strutil.h>
 
 namespace google {
@@ -61,6 +62,7 @@ void SetStringVariables(const FieldDescriptor* descriptor,
                 ".get()";
   (*variables)["pointer_type"] =
       descriptor->type() == FieldDescriptor::TYPE_BYTES ? "void" : "char";
+  (*variables)["null_check"] = "GOOGLE_DCHECK(value != NULL);\n";
   // NOTE: Escaped here to unblock proto1->proto2 migration.
   // TODO(liujisi): Extend this to apply for other conflicting methods.
   (*variables)["release_name"] =
@@ -190,6 +192,7 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
         "  // @@protoc_insertion_point(field_set:$full_name$)\n"
         "}\n"
         "$inline$void $classname$::set_$name$(const char* value) {\n"
+        "  $null_check$"
         "  $set_hasbit$\n"
         "  $name$_.Set($default_variable$, $string_piece$(value),\n"
         "              GetArenaNoVirtual());\n"
@@ -267,6 +270,7 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
         "}\n"
         "#endif\n"
         "$inline$void $classname$::set_$name$(const char* value) {\n"
+        "  $null_check$"
         "  $set_hasbit$\n"
         "  $name$_.SetNoArena($default_variable$, $string_piece$(value));\n"
         "  // @@protoc_insertion_point(field_set_char:$full_name$)\n"
@@ -548,6 +552,7 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
         "  // @@protoc_insertion_point(field_set:$full_name$)\n"
         "}\n"
         "$inline$void $classname$::set_$name$(const char* value) {\n"
+        "  $null_check$"
         "  if (!has_$name$()) {\n"
         "    clear_$oneof_name$();\n"
         "    set_has_$name$();\n"
@@ -664,6 +669,7 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
         "}\n"
         "#endif\n"
         "$inline$void $classname$::set_$name$(const char* value) {\n"
+        "  $null_check$"
         "  if (!has_$name$()) {\n"
         "    clear_$oneof_name$();\n"
         "    set_has_$name$();\n"
@@ -762,7 +768,7 @@ void StringOneofFieldGenerator::
 GenerateConstructorCode(io::Printer* printer) const {
   printer->Print(
       variables_,
-      "$classname$_default_oneof_instance_.$name$_.UnsafeSetDefault(\n"
+      "_$classname$_default_instance_.$name$_.UnsafeSetDefault(\n"
       "    $default_variable$);\n");
 }
 
@@ -830,17 +836,21 @@ GenerateAccessorDeclarations(io::Printer* printer) const {
     "$deprecated_attr$const ::std::string& $name$(int index) const;\n"
     "$deprecated_attr$::std::string* mutable_$name$(int index);\n"
     "$deprecated_attr$void set_$name$(int index, const ::std::string& value);\n"
+    "#if LANG_CXX11\n"
+    "$deprecated_attr$void set_$name$(int index, ::std::string&& value);\n"
+    "#endif\n"
     "$deprecated_attr$void set_$name$(int index, const char* value);\n"
     ""
     "$deprecated_attr$void set_$name$("
                  "int index, const $pointer_type$* value, size_t size);\n"
     "$deprecated_attr$::std::string* add_$name$();\n"
     "$deprecated_attr$void add_$name$(const ::std::string& value);\n"
+    "#if LANG_CXX11\n"
+    "$deprecated_attr$void add_$name$(::std::string&& value);\n"
+    "#endif\n"
     "$deprecated_attr$void add_$name$(const char* value);\n"
     "$deprecated_attr$void add_$name$(const $pointer_type$* value, size_t size)"
-                 ";\n");
-
-  printer->Print(variables_,
+                 ";\n"
     "$deprecated_attr$const ::google::protobuf::RepeatedPtrField< ::std::string>& $name$() "
                  "const;\n"
     "$deprecated_attr$::google::protobuf::RepeatedPtrField< ::std::string>* mutable_$name$()"
@@ -871,7 +881,14 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
     "  // @@protoc_insertion_point(field_set:$full_name$)\n"
     "  $name$_.Mutable(index)->assign(value);\n"
     "}\n"
+    "#if LANG_CXX11\n"
+    "$inline$void $classname$::set_$name$(int index, ::std::string&& value) {\n"
+    "  // @@protoc_insertion_point(field_set:$full_name$)\n"
+    "  $name$_.Mutable(index)->assign(std::move(value));\n"
+    "}\n"
+    "#endif\n"
     "$inline$void $classname$::set_$name$(int index, const char* value) {\n"
+    "  $null_check$"
     "  $name$_.Mutable(index)->assign(value);\n"
     "  // @@protoc_insertion_point(field_set_char:$full_name$)\n"
     "}\n"
@@ -890,7 +907,14 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
     "  $name$_.Add()->assign(value);\n"
     "  // @@protoc_insertion_point(field_add:$full_name$)\n"
     "}\n"
+    "#if LANG_CXX11\n"
+    "$inline$void $classname$::add_$name$(::std::string&& value) {\n"
+    "  $name$_.Add(std::move(value));\n"
+    "  // @@protoc_insertion_point(field_add:$full_name$)\n"
+    "}\n"
+    "#endif\n"
     "$inline$void $classname$::add_$name$(const char* value) {\n"
+    "  $null_check$"
     "  $name$_.Add()->assign(value);\n"
     "  // @@protoc_insertion_point(field_add_char:$full_name$)\n"
     "}\n"
@@ -898,8 +922,7 @@ GenerateInlineAccessorDefinitions(io::Printer* printer,
     "$classname$::add_$name$(const $pointer_type$* value, size_t size) {\n"
     "  $name$_.Add()->assign(reinterpret_cast<const char*>(value), size);\n"
     "  // @@protoc_insertion_point(field_add_pointer:$full_name$)\n"
-    "}\n");
-  printer->Print(variables,
+    "}\n"
     "$inline$const ::google::protobuf::RepeatedPtrField< ::std::string>&\n"
     "$classname$::$name$() const {\n"
     "  // @@protoc_insertion_point(field_list:$full_name$)\n"
@@ -924,7 +947,7 @@ GenerateMergingCode(io::Printer* printer) const {
 
 void RepeatedStringFieldGenerator::
 GenerateSwappingCode(io::Printer* printer) const {
-  printer->Print(variables_, "$name$_.UnsafeArenaSwap(&other->$name$_);\n");
+  printer->Print(variables_, "$name$_.InternalSwap(&other->$name$_);\n");
 }
 
 void RepeatedStringFieldGenerator::
@@ -954,7 +977,7 @@ GenerateMergeFromCodedStream(io::Printer* printer) const {
 void RepeatedStringFieldGenerator::
 GenerateSerializeWithCachedSizes(io::Printer* printer) const {
   printer->Print(variables_,
-    "for (int i = 0; i < this->$name$_size(); i++) {\n");
+        "for (int i = 0, n = this->$name$_size(); i < n; i++) {\n");
   printer->Indent();
   if (descriptor_->type() == FieldDescriptor::TYPE_STRING) {
     GenerateUtf8CheckCodeForString(
@@ -971,7 +994,7 @@ GenerateSerializeWithCachedSizes(io::Printer* printer) const {
 void RepeatedStringFieldGenerator::
 GenerateSerializeWithCachedSizesToArray(io::Printer* printer) const {
   printer->Print(variables_,
-    "for (int i = 0; i < this->$name$_size(); i++) {\n");
+    "for (int i = 0, n = this->$name$_size(); i < n; i++) {\n");
   printer->Indent();
   if (descriptor_->type() == FieldDescriptor::TYPE_STRING) {
     GenerateUtf8CheckCodeForString(
@@ -990,7 +1013,7 @@ GenerateByteSize(io::Printer* printer) const {
   printer->Print(variables_,
     "total_size += $tag_size$ *\n"
     "    ::google::protobuf::internal::FromIntSize(this->$name$_size());\n"
-    "for (int i = 0; i < this->$name$_size(); i++) {\n"
+    "for (int i = 0, n = this->$name$_size(); i < n; i++) {\n"
     "  total_size += ::google::protobuf::internal::WireFormatLite::$declared_type$Size(\n"
     "    this->$name$(i));\n"
     "}\n");

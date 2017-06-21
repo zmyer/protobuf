@@ -37,6 +37,12 @@
 
 #include <stdio.h>
 #include <sys/types.h>
+#ifdef major
+#undef major
+#endif
+#ifdef minor
+#undef minor
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #ifdef _MSC_VER
@@ -115,6 +121,9 @@ static const char* kPathSeparator = ";";
 #else
 static const char* kPathSeparator = ":";
 #endif
+
+static const char* kDefaultDirectDependenciesViolationMsg =
+    "File is imported but not declared in --direct_dependencies: %s";
 
 // Returns true if the text looks like a Windows-style absolute path, starting
 // with a drive letter.  Example:  "C:\foo".  TODO(kenton):  Share this with
@@ -276,12 +285,13 @@ class CommandLineInterface::ErrorPrinter : public MultiFileErrorCollector,
                                            public io::ErrorCollector {
  public:
   ErrorPrinter(ErrorFormat format, DiskSourceTree *tree = NULL)
-    : format_(format), tree_(tree) {}
+    : format_(format), tree_(tree), found_errors_(false) {}
   ~ErrorPrinter() {}
 
   // implements MultiFileErrorCollector ------------------------------
   void AddError(const string& filename, int line, int column,
                 const string& message) {
+    found_errors_ = true;
     AddErrorOrWarning(filename, line, column, message, "error", std::cerr);
   }
 
@@ -299,10 +309,12 @@ class CommandLineInterface::ErrorPrinter : public MultiFileErrorCollector,
     AddErrorOrWarning("input", line, column, message, "warning", std::clog);
   }
 
+  bool FoundErrors() const { return found_errors_; }
+
  private:
-  void AddErrorOrWarning(
-      const string& filename, int line, int column,
-      const string& message, const string& type, ostream& out) {
+  void AddErrorOrWarning(const string& filename, int line, int column,
+                         const string& message, const string& type,
+                         std::ostream& out) {
     // Print full path when running under MSVS
     string dfile;
     if (format_ == CommandLineInterface::ERROR_FORMAT_MSVS &&
@@ -337,6 +349,7 @@ class CommandLineInterface::ErrorPrinter : public MultiFileErrorCollector,
 
   const ErrorFormat format_;
   DiskSourceTree *tree_;
+  bool found_errors_;
 };
 
 // -------------------------------------------------------------------
@@ -708,14 +721,17 @@ CommandLineInterface::MemoryOutputStream::~MemoryOutputStream() {
 // ===================================================================
 
 CommandLineInterface::CommandLineInterface()
-  : mode_(MODE_COMPILE),
-    print_mode_(PRINT_NONE),
-    error_format_(ERROR_FORMAT_GCC),
-    direct_dependencies_explicitly_set_(false),
-    imports_in_descriptor_set_(false),
-    source_info_in_descriptor_set_(false),
-    disallow_services_(false),
-    inputs_are_proto_path_relative_(false) {}
+    : mode_(MODE_COMPILE),
+      print_mode_(PRINT_NONE),
+      error_format_(ERROR_FORMAT_GCC),
+      direct_dependencies_explicitly_set_(false),
+      direct_dependencies_violation_msg_(
+          kDefaultDirectDependenciesViolationMsg),
+      imports_in_descriptor_set_(false),
+      source_info_in_descriptor_set_(false),
+      disallow_services_(false),
+      inputs_are_proto_path_relative_(false) {
+}
 CommandLineInterface::~CommandLineInterface() {}
 
 void CommandLineInterface::RegisterGenerator(const string& flag_name,
@@ -788,8 +804,8 @@ int CommandLineInterface::Run(int argc, const char* const argv[]) {
 
     // Enforce --disallow_services.
     if (disallow_services_ && parsed_file->service_count() > 0) {
-      cerr << parsed_file->name() << ": This file contains services, but "
-              "--disallow_services was used." << endl;
+      std::cerr << parsed_file->name() << ": This file contains services, but "
+              "--disallow_services was used." << std::endl;
       return 1;
     }
 
@@ -800,10 +816,11 @@ int CommandLineInterface::Run(int argc, const char* const argv[]) {
         if (direct_dependencies_.find(parsed_file->dependency(i)->name()) ==
             direct_dependencies_.end()) {
           indirect_imports = true;
-          cerr << parsed_file->name()
-               << ": File is imported but not declared in "
-               << "--direct_dependencies: "
-               << parsed_file->dependency(i)->name() << std::endl;
+          std::cerr << parsed_file->name() << ": "
+                    << StringReplace(direct_dependencies_violation_msg_, "%s",
+                                     parsed_file->dependency(i)->name(),
+                                     true /* replace_all */)
+                    << std::endl;
         }
       }
       if (indirect_imports) {
@@ -895,6 +912,10 @@ int CommandLineInterface::Run(int argc, const char* const argv[]) {
     }
   }
 
+  if (error_collector.FoundErrors()) {
+    return 1;
+  }
+
   if (mode_ == MODE_PRINT) {
     switch (print_mode_) {
       case PRINT_FREE_FIELDS:
@@ -924,6 +945,7 @@ void CommandLineInterface::Clear() {
   proto_path_.clear();
   input_files_.clear();
   direct_dependencies_.clear();
+  direct_dependencies_violation_msg_ = kDefaultDirectDependenciesViolationMsg;
   output_directives_.clear();
   codec_type_.clear();
   descriptor_set_name_.clear();
@@ -990,6 +1012,12 @@ CommandLineInterface::ParseArguments(int argc, const char* const argv[]) {
     arguments.push_back(argv[i]);
   }
 
+  // if no arguments are given, show help
+  if(arguments.empty()) {
+    PrintHelpText();
+    return PARSE_ARGUMENT_DONE_AND_EXIT;  // Exit without running compiler.
+  }
+
   // Iterate through all arguments and parse them.
   for (int i = 0; i < arguments.size(); ++i) {
     string name, value;
@@ -1015,15 +1043,33 @@ CommandLineInterface::ParseArguments(int argc, const char* const argv[]) {
   }
 
   // Make sure each plugin option has a matching plugin output.
-  for (map<string, string>::const_iterator i = plugin_parameters_.begin();
+  bool foundUnknownPluginOption = false;
+  for (std::map<string, string>::const_iterator i = plugin_parameters_.begin();
        i != plugin_parameters_.end(); ++i) {
-    if (plugins_.find(i->first) == plugins_.end()) {
+    if (plugins_.find(i->first) != plugins_.end()) {
+      continue;
+    }
+    bool foundImplicitPlugin = false;
+    for (std::vector<OutputDirective>::const_iterator j = output_directives_.begin();
+         j != output_directives_.end(); ++j) {
+      if (j->generator == NULL) {
+        string plugin_name = PluginName(plugin_prefix_ , j->name);
+        if (plugin_name == i->first) {
+          foundImplicitPlugin = true;
+          break;
+        }
+      }
+    }
+    if (!foundImplicitPlugin) {
       std::cerr << "Unknown flag: "
                 // strip prefix + "gen-" and add back "_opt"
                 << "--" + i->first.substr(plugin_prefix_.size() + 4) + "_opt"
                 << std::endl;
-      return PARSE_ARGUMENT_FAIL;
+      foundUnknownPluginOption = true;
     }
+  }
+  if (foundUnknownPluginOption) {
+    return PARSE_ARGUMENT_FAIL;
   }
 
   // If no --proto_path was given, use the current working directory.
@@ -1181,7 +1227,8 @@ CommandLineInterface::InterpretArgument(const string& name,
       if (access(disk_path.c_str(), F_OK) < 0) {
         // Try the original path; it may have just happed to have a '=' in it.
         if (access(parts[i].c_str(), F_OK) < 0) {
-          cerr << disk_path << ": warning: directory does not exist." << endl;
+          std::cerr << disk_path << ": warning: directory does not exist."
+                    << std::endl;
         } else {
           virtual_path = "";
           disk_path = parts[i];
@@ -1208,6 +1255,9 @@ CommandLineInterface::InterpretArgument(const string& name,
         value, ":", true);
     GOOGLE_DCHECK(direct_dependencies_.empty());
     direct_dependencies_.insert(direct.begin(), direct.end());
+
+  } else if (name == "--direct_dependencies_violation_msg") {
+    direct_dependencies_violation_msg_ = value;
 
   } else if (name == "-o" || name == "--descriptor_set_out") {
     if (!descriptor_set_name_.empty()) {
@@ -1259,9 +1309,9 @@ CommandLineInterface::InterpretArgument(const string& name,
     if (!version_info_.empty()) {
       std::cout << version_info_ << std::endl;
     }
-    cout << "libprotoc "
+    std::cout << "libprotoc "
          << protobuf::internal::VersionString(GOOGLE_PROTOBUF_VERSION)
-         << endl;
+         << std::endl;
     return PARSE_ARGUMENT_DONE_AND_EXIT;  // Exit without running compiler.
 
   } else if (name == "--disallow_services") {
@@ -1348,6 +1398,7 @@ CommandLineInterface::InterpretArgument(const string& name,
     }
     mode_ = MODE_PRINT;
     print_mode_ = PRINT_FREE_FIELDS;
+  } else if (name == "--profile_path") {
   } else {
     // Some other flag.  Look it up in the generators list.
     const GeneratorInfo* generator_info =
@@ -1409,7 +1460,7 @@ CommandLineInterface::InterpretArgument(const string& name,
 
 void CommandLineInterface::PrintHelpText() {
   // Sorry for indentation here; line wrapping would be uglier.
-  std::cerr <<
+  std::cout <<
 "Usage: " << executable_name_ << " [OPTION] PROTO_FILES\n"
 "Parse PROTO_FILES and generate output based on the options given:\n"
 "  -IPATH, --proto_path=PATH   Specify the directory in which to search for\n"
@@ -1456,7 +1507,7 @@ void CommandLineInterface::PrintHelpText() {
 "                              occupied fields numbers.\n"
       << std::endl;
   if (!plugin_prefix_.empty()) {
-    std::cerr <<
+    std::cout <<
 "  --plugin=EXECUTABLE         Specifies a plugin executable to use.\n"
 "                              Normally, protoc searches the PATH for\n"
 "                              plugins, but you may specify additional\n"
@@ -1472,7 +1523,7 @@ void CommandLineInterface::PrintHelpText() {
     // FIXME(kenton):  If the text is long enough it will wrap, which is ugly,
     //   but fixing this nicely (e.g. splitting on spaces) is probably more
     //   trouble than it's worth.
-    std::cerr << "  " << iter->first << "=OUT_DIR "
+    std::cout << "  " << iter->first << "=OUT_DIR "
               << string(19 - iter->first.size(), ' ')  // Spaces for alignment.
               << iter->second.help_text << std::endl;
   }
@@ -1747,30 +1798,33 @@ bool CommandLineInterface::EncodeOrDecode(const DescriptorPool* pool) {
 }
 
 bool CommandLineInterface::WriteDescriptorSet(
-    const std::vector<const FileDescriptor*> parsed_files) {
+    const std::vector<const FileDescriptor*>& parsed_files) {
   FileDescriptorSet file_set;
 
-  if (imports_in_descriptor_set_) {
-    std::set<const FileDescriptor*> already_seen;
+  std::set<const FileDescriptor*> already_seen;
+  if (!imports_in_descriptor_set_) {
+    // Since we don't want to output transitive dependencies, but we do want
+    // things to be in dependency order, add all dependencies that aren't in
+    // parsed_files to already_seen.  This will short circuit the recursion
+    // in GetTransitiveDependencies.
+    std::set<const FileDescriptor*> to_output;
+    to_output.insert(parsed_files.begin(), parsed_files.end());
     for (int i = 0; i < parsed_files.size(); i++) {
-      GetTransitiveDependencies(parsed_files[i],
-                                true,  // Include json_name
-                                source_info_in_descriptor_set_,
-                                &already_seen, file_set.mutable_file());
-    }
-  } else {
-    std::set<const FileDescriptor*> already_seen;
-    for (int i = 0; i < parsed_files.size(); i++) {
-      if (!already_seen.insert(parsed_files[i]).second) {
-        continue;
-      }
-      FileDescriptorProto* file_proto = file_set.add_file();
-      parsed_files[i]->CopyTo(file_proto);
-      parsed_files[i]->CopyJsonNameTo(file_proto);
-      if (source_info_in_descriptor_set_) {
-        parsed_files[i]->CopySourceCodeInfoTo(file_proto);
+      const FileDescriptor* file = parsed_files[i];
+      for (int i = 0; i < file->dependency_count(); i++) {
+        const FileDescriptor* dependency = file->dependency(i);
+        // if the dependency isn't in parsed files, mark it as already seen
+        if (to_output.find(dependency) == to_output.end()) {
+          already_seen.insert(dependency);
+        }
       }
     }
+  }
+  for (int i = 0; i < parsed_files.size(); i++) {
+    GetTransitiveDependencies(parsed_files[i],
+                              true,  // Include json_name
+                              source_info_in_descriptor_set_,
+                              &already_seen, file_set.mutable_file());
   }
 
   int fd;

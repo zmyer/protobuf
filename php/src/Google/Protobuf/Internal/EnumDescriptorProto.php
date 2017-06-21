@@ -57,6 +57,8 @@ class EnumDescriptorProto extends \Google\Protobuf\Internal\Message
         GPBUtil::checkString($var, True);
         $this->name = $var;
         $this->has_name = true;
+
+        return $this;
     }
 
     public function hasName()
@@ -77,9 +79,11 @@ class EnumDescriptorProto extends \Google\Protobuf\Internal\Message
      */
     public function setValue(&$var)
     {
-        GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::MESSAGE, \Google\Protobuf\Internal\EnumValueDescriptorProto::class);
-        $this->value = $var;
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::MESSAGE, \Google\Protobuf\Internal\EnumValueDescriptorProto::class);
+        $this->value = $arr;
         $this->has_value = true;
+
+        return $this;
     }
 
     public function hasValue()
@@ -103,6 +107,8 @@ class EnumDescriptorProto extends \Google\Protobuf\Internal\Message
         GPBUtil::checkMessage($var, \Google\Protobuf\Internal\EnumOptions::class);
         $this->options = $var;
         $this->has_options = true;
+
+        return $this;
     }
 
     public function hasOptions()

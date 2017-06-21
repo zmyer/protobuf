@@ -74,6 +74,7 @@ void SetPrimitiveVariables(const FieldDescriptor* descriptor,
       SimpleItoa(static_cast<int32>(WireFormat::MakeTag(descriptor)));
   (*variables)["tag_size"] = SimpleItoa(
       WireFormat::TagSize(descriptor->number(), GetType(descriptor)));
+  (*variables)["required"] = descriptor->is_required() ? "true" : "false";
 
   string capitalized_type = UnderscoresToCamelCase(PrimitiveTypeName(javaType),
                                                    true /* cap_next_letter */);
@@ -295,6 +296,7 @@ void ImmutablePrimitiveFieldLiteGenerator::
 GenerateFieldBuilderInitializationCode(io::Printer* printer)  const {
   // noop for primitives
 }
+
 
 void ImmutablePrimitiveFieldLiteGenerator::
 GenerateInitializationCode(io::Printer* printer) const {
@@ -745,6 +747,7 @@ void RepeatedImmutablePrimitiveFieldLiteGenerator::
 GenerateFieldBuilderInitializationCode(io::Printer* printer)  const {
   // noop for primitives
 }
+
 
 void RepeatedImmutablePrimitiveFieldLiteGenerator::
 GenerateInitializationCode(io::Printer* printer) const {

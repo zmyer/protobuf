@@ -106,8 +106,9 @@ jspb.ExtensionFieldInfo = function(fieldNumber, fieldName, ctor, toObjectFn,
 /**
  * Stores binary-related information for a single extension field.
  * @param {!jspb.ExtensionFieldInfo<T>} fieldInfo
- * @param {!function(number,?)} binaryReaderFn
- * @param {!function(number,?)|function(number,?,?,?,?,?)} binaryWriterFn
+ * @param {function(this:jspb.BinaryReader,number,?)} binaryReaderFn
+ * @param {function(this:jspb.BinaryWriter,number,?)
+ *        |function(this:jspb.BinaryWriter,number,?,?,?,?,?)} binaryWriterFn
  * @param {function(?,?)=} opt_binaryMessageSerializeFn
  * @param {function(?,?)=} opt_binaryMessageDeserializeFn
  * @param {boolean=} opt_isPacked
@@ -141,6 +142,21 @@ jspb.ExtensionFieldInfo.prototype.isMessageType = function() {
 
 /**
  * Base class for all JsPb messages.
+ *
+ * Several common methods (toObject, serializeBinary, in particular) are not
+ * defined on the prototype to encourage code patterns that minimize code bloat
+ * due to otherwise unused code on all protos contained in the project.
+ *
+ * If you want to call these methods on a generic message, either
+ * pass in your instance of method as a parameter:
+ *     someFunction(instanceOfKnownProto,
+ *                  KnownProtoClass.prototype.serializeBinary);
+ * or use a lambda that knows the type:
+ *     someFunction(()=>instanceOfKnownProto.serializeBinary());
+ * or, if you don't care about code size, just suppress the
+ *     WARNING - Property serializeBinary never defined on jspb.Message
+ * and call it the intuitive way.
+ *
  * @constructor
  * @struct
  */
@@ -175,6 +191,22 @@ goog.define('jspb.Message.GENERATE_FROM_OBJECT', !goog.DISALLOW_TEST_ONLY_CODE);
 
 
 /**
+ * @define {boolean} Whether to generate toString methods for objects. Turn
+ *     this off if you do use toString in your project and want to trim it from
+ *     compiled JS.
+ */
+goog.define('jspb.Message.GENERATE_TO_STRING', true);
+
+
+/**
+ * @define {boolean} Whether arrays passed to initialize() can be assumed to be
+ *     local (e.g. not from another iframe) and thus safely classified with
+ *     instanceof Array.
+ */
+goog.define('jspb.Message.ASSUME_LOCAL_ARRAYS', false);
+
+
+/**
  * @define {boolean} Turning on this flag does NOT change the behavior of JSPB
  *     and only affects private internal state. It may, however, break some
  *     tests that use naive deeply-equals algorithms, because using a proto
@@ -186,7 +218,7 @@ goog.define('jspb.Message.MINIMIZE_MEMORY_ALLOCATIONS', COMPILED);
 
 
 /**
- * Does this browser support Uint8Aray typed arrays?
+ * Does this JavaScript environment support Uint8Aray typed arrays?
  * @type {boolean}
  * @private
  */
@@ -364,6 +396,18 @@ jspb.Message.EMPTY_LIST_SENTINEL_ = goog.DEBUG && Object.freeze ?
 
 
 /**
+ * Returns true if the provided argument is an array.
+ * @param {*} o The object to classify as array or not.
+ * @return {boolean} True if the provided object is an array.
+ * @private
+ */
+jspb.Message.isArray_ = function(o) {
+  return jspb.Message.ASSUME_LOCAL_ARRAYS ? o instanceof Array :
+                                            goog.isArray(o);
+};
+
+
+/**
  * Ensures that the array contains an extension object if necessary.
  * If the array contains an extension object in its last position, then the
  * object is kept in place and its position is used as the pivot.  If not, then
@@ -383,8 +427,8 @@ jspb.Message.materializeExtensionObject_ = function(msg, suggestedPivot) {
     // the object is not an array, since arrays are valid field values.
     // NOTE(lukestebbing): We avoid looking at .length to avoid a JIT bug
     // in Safari on iOS 8. See the description of CL/86511464 for details.
-    if (obj && typeof obj == 'object' && !goog.isArray(obj) &&
-       !(jspb.Message.SUPPORTS_UINT8ARRAY_ && obj instanceof Uint8Array)) {
+    if (obj && typeof obj == 'object' && !jspb.Message.isArray_(obj) &&
+        !(jspb.Message.SUPPORTS_UINT8ARRAY_ && obj instanceof Uint8Array)) {
       msg.pivot_ = foundIndex - msg.arrayIndexOffset_;
       msg.extensionObject_ = obj;
       return;
@@ -469,7 +513,7 @@ jspb.Message.toObjectExtension = function(proto, obj, extensions,
   for (var fieldNumber in extensions) {
     var fieldInfo = extensions[fieldNumber];
     var value = getExtensionFn.call(proto, fieldInfo);
-    if (value) {
+    if (goog.isDefAndNotNull(value)) {
       for (var name in fieldInfo.fieldName) {
         if (fieldInfo.fieldName.hasOwnProperty(name)) {
           break; // the compiled field name
@@ -496,7 +540,7 @@ jspb.Message.toObjectExtension = function(proto, obj, extensions,
  * @param {!jspb.Message} proto The proto whose extensions to convert.
  * @param {*} writer The binary-format writer to write to.
  * @param {!Object} extensions The proto class' registered extensions.
- * @param {function(jspb.ExtensionFieldInfo) : *} getExtensionFn The proto
+ * @param {function(this:jspb.Message,!jspb.ExtensionFieldInfo) : *} getExtensionFn The proto
  *     class' getExtension function. Passed for effective dead code removal.
  */
 jspb.Message.serializeBinaryExtensions = function(proto, writer, extensions,
@@ -513,7 +557,7 @@ jspb.Message.serializeBinaryExtensions = function(proto, writer, extensions,
                       'without binary serialization support');
     }
     var value = getExtensionFn.call(proto, fieldInfo);
-    if (value) {
+    if (goog.isDefAndNotNull(value)) {
       if (fieldInfo.isMessageType()) {
         // If the message type of the extension was generated without binary
         // support, there may not be a binary message serializer function, and
@@ -542,10 +586,13 @@ jspb.Message.serializeBinaryExtensions = function(proto, writer, extensions,
  * Reads an extension field from the given reader and, if a valid extension,
  * sets the extension value.
  * @param {!jspb.Message} msg A jspb proto.
- * @param {{skipField:function(),getFieldNumber:function():number}} reader
+ * @param {{
+ *   skipField:function(this:jspb.BinaryReader),
+ *   getFieldNumber:function(this:jspb.BinaryReader):number
+ * }} reader
  * @param {!Object} extensions The extensions object.
- * @param {function(jspb.ExtensionFieldInfo)} getExtensionFn
- * @param {function(jspb.ExtensionFieldInfo, ?)} setExtensionFn
+ * @param {function(this:jspb.Message,!jspb.ExtensionFieldInfo)} getExtensionFn
+ * @param {function(this:jspb.Message,!jspb.ExtensionFieldInfo, ?)} setExtensionFn
  */
 jspb.Message.readBinaryExtension = function(msg, reader, extensions,
     getExtensionFn, setExtensionFn) {
@@ -1140,6 +1187,7 @@ jspb.Message.prototype.toArray = function() {
 
 
 
+if (jspb.Message.GENERATE_TO_STRING) {
 
 /**
  * Creates a string representation of the internal data array of this proto.
@@ -1152,6 +1200,7 @@ jspb.Message.prototype.toString = function() {
   return this.array.toString();
 };
 
+}
 
 /**
  * Gets the value of the extension field from the extended object.

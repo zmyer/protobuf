@@ -70,6 +70,7 @@ void SetMessageVariables(const FieldDescriptor* descriptor,
   // by the proto compiler
   (*variables)["deprecation"] = descriptor->options().deprecated()
       ? "@java.lang.Deprecated " : "";
+  (*variables)["required"] = descriptor->is_required() ? "true" : "false";
 
   if (SupportFieldPresence(descriptor->file())) {
     // For singular messages and builders, one bit is used for the hasField bit.
@@ -449,6 +450,7 @@ GenerateMembers(io::Printer* printer) const {
     "  }\n"
     "}\n");
 }
+
 
 void ImmutableMessageOneofFieldLiteGenerator::
 GenerateBuilderMembers(io::Printer* printer) const {
@@ -854,6 +856,7 @@ GenerateFieldBuilderInitializationCode(io::Printer* printer)  const {
   printer->Print(variables_,
     "get$capitalized_name$FieldBuilder();\n");
 }
+
 
 void RepeatedImmutableMessageFieldLiteGenerator::
 GenerateInitializationCode(io::Printer* printer) const {

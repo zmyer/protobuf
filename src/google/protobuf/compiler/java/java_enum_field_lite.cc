@@ -76,6 +76,7 @@ void SetEnumVariables(const FieldDescriptor* descriptor,
   // by the proto compiler
   (*variables)["deprecation"] = descriptor->options().deprecated()
       ? "@java.lang.Deprecated " : "";
+  (*variables)["required"] = descriptor->is_required() ? "true" : "false";
 
   if (SupportFieldPresence(descriptor->file())) {
     // For singular messages and builders, one bit is used for the hasField bit.
@@ -313,6 +314,7 @@ GenerateParsingDoneCode(io::Printer* printer) const {
   // noop for enums
 }
 
+
 void ImmutableEnumFieldLiteGenerator::
 GenerateSerializationCode(io::Printer* printer) const {
   printer->Print(variables_,
@@ -421,6 +423,7 @@ GenerateMembers(io::Printer* printer) const {
     "  }\n"
     "}\n");
 }
+
 
 void ImmutableEnumOneofFieldLiteGenerator::
 GenerateBuilderMembers(io::Printer* printer) const {
@@ -705,6 +708,7 @@ GenerateMembers(io::Printer* printer) const {
       "}\n");
   }
 }
+
 
 void RepeatedImmutableEnumFieldLiteGenerator::
 GenerateBuilderMembers(io::Printer* printer) const {

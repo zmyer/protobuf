@@ -258,7 +258,7 @@ class LIBPROTOC_EXPORT CommandLineInterface {
 
   // Implements the --descriptor_set_out option.
   bool WriteDescriptorSet(
-      const std::vector<const FileDescriptor*> parsed_files);
+      const std::vector<const FileDescriptor*>& parsed_files);
 
   // Implements the --dependency_out option
   bool GenerateDependencyManifestFile(
@@ -365,6 +365,10 @@ class LIBPROTOC_EXPORT CommandLineInterface {
   std::set<string> direct_dependencies_;
   bool direct_dependencies_explicitly_set_;
 
+  // If there's a violation of depend-on-what-you-import, this string will be
+  // presented to the user. "%s" will be replaced with the violating import.
+  string direct_dependencies_violation_msg_;
+
   // output_directives_ lists all the files we are supposed to output and what
   // generator to use for each.
   struct OutputDirective {
@@ -386,6 +390,11 @@ class LIBPROTOC_EXPORT CommandLineInterface {
   // If --dependency_out was given, this is the path to the file where the
   // dependency file will be written. Otherwise, empty.
   string dependency_out_name_;
+
+  // Path to a file that contains serialized AccessInfo which provides
+  // relative hotness of fields per message. This helps protoc to generate
+  // better code.
+  string profile_path_;
 
   // True if --include_imports was given, meaning that we should
   // write all transitive dependencies to the DescriptorSet.  Otherwise, only
